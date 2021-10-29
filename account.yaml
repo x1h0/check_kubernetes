@@ -10,6 +10,7 @@ kind: ServiceAccount
 metadata:
   name: monitoring
   namespace: monitoring
+automountServiceAccountToken: false
 
 ---
 kind: ClusterRole

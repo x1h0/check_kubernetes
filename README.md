@@ -25,10 +25,12 @@ Nagios-style checks against Kubernetes API. Designed for usage with Nagios, Icin
 	                    - TLS expiration days for TLS mode; default is 30
 	                    - Pod restart count in pods mode; default is 30
 	                    - Job failed count in jobs mode; default is 1
+	                    - Pvc storage utilization; default is 80%
 	  -c CRIT          Critical threshold for
 	                    - Pod restart count (in pods mode); default is 150
 	                    - Unbound Persistent Volumes in unboundpvs mode; default is 5
 	                    - Job failed count in jobs mode; default is 2
+	                    - Pvc storage utilization; default is 90%
 	  -b               Brief mode (more suitable for Zabbix)
 	  -M EXIT_CODE     Exit code when resource is missing; default is 2 (CRITICAL)
 	  -h               Show this help and exit
@@ -43,6 +45,7 @@ Nagios-style checks against Kubernetes API. Designed for usage with Nagios, Icin
 	  replicasets      Check for replicasets readiness
 	  statefulsets     Check for statefulsets readiness
 	  tls              Check for tls secrets expiration dates
+	  pvc              Check for pvc utilization
 	  unboundpvs       Check for unbound persistent volumes.
 	  components       Check for health of k8s components (Deprectaed in K8s 1.19+)
 
@@ -51,7 +54,7 @@ Nagios-style checks against Kubernetes API. Designed for usage with Nagios, Icin
 Check apiserver health using tokenfile:
 
     ./check_kubernetes.sh -m apiserver -H https://<...>:6443 -t /path/to/tokenfile
-    OK. Kuberenetes apiserver health is OK
+    OK. Kubernetes apiserver health is OK
 
 Check whether all deployments are available using token:
 
@@ -102,6 +105,12 @@ Checked failed jobs named 'good':
 
     ./check_kubernetes.sh -m jobs -n good
     OK: 0 failed jobs is below threshold
+
+Check utilization if pvc (if consumes more than %):
+
+    ./check_kubernetes.sh -m pvc
+    CRITICAL. Very high storage utilization on pvc prometheus-data: 93% (86106636288/157459890176 Bytes)
+
 
 ## Brief mode
 

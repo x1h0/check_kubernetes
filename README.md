@@ -6,6 +6,7 @@ Nagios-style checks against Kubernetes API. Designed for usage with Nagios, Icin
 
  * jq
  * openssl
+ * bc (for mode pvc)
 
 ## Script usage
 
@@ -31,7 +32,6 @@ Nagios-style checks against Kubernetes API. Designed for usage with Nagios, Icin
 	                    - Unbound Persistent Volumes in unboundpvs mode; default is 5
 	                    - Job failed count in jobs mode; default is 2
 	                    - Pvc storage utilization; default is 90%
-	  -b               Brief mode (more suitable for Zabbix)
 	  -M EXIT_CODE     Exit code when resource is missing; default is 2 (CRITICAL)
 	  -h               Show this help and exit
 
@@ -112,7 +112,7 @@ Check utilization if pvc (if consumes more than %):
     CRITICAL. Very high storage utilization on pvc prometheus-data: 93% (86106636288/157459890176 Bytes)
 
 
-## Brief mode
+## Brief mode (removed in v1.1.0)
 
 All modes support the -b brief option.  In this mode, a single numerical output is returned.  The number is positive on success and zero or negative on error.
 
@@ -126,7 +126,7 @@ All the needed objects (ServiceAccount, ClusterRole, RoleBinding) can be created
 
     kubectl apply -f https://raw.githubusercontent.com/agapoff/check_kubernetes/master/account.yaml
 
-You may also prefer to revise and tighten the RBAC role if you're not going to use all modes. For example you may get rid of secrets permission if you have no need to check the TLS certs.
+For mode pvc or tls you need to enable the permissions in the yaml first. Those two can have security implications and are thus disabled by default.
 
 Then in order to get the token just issue this command:
 

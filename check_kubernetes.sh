@@ -28,16 +28,19 @@ usage() {
 	                    - Pod restart count in pods mode; default is 30
 	                    - Job failed count in jobs mode; default is 1
 	                    - Pvc storage utilization; default is 80%
+	                    - API cert expiration days for apicert mode; default is 30
 	  -c CRIT          Critical threshold for
 	                    - Pod restart count (in pods mode); default is 150
 	                    - Unbound Persistent Volumes in unboundpvs mode; default is 5
 	                    - Job failed count in jobs mode; default is 2
 	                    - Pvc storage utilization; default is 90%
+	                    - API cert expiration days for apicert mode; default is 15
 	  -M EXIT_CODE     Exit code when resource is missing; default is 2 (CRITICAL)
 	  -h               Show this help and exit
 
 	Modes are:
 	  apiserver        Not for kubectl, should be used for each apiserver independently
+	  apicert          Check the apicert expiration date
 	  nodes            Check for active nodes
 	  daemonsets       Check for daemonsets readiness
 	  deployments      Check for deployments availability
@@ -146,6 +149,34 @@ mode_apiserver() {
     else
         data=$(echo "$data" | grep "\[\-\]")
         OUTPUT="CRITICAL. Kubernetes apiserver health is $data"
+        EXITCODE=2
+    fi
+}
+
+mode_apicert() {
+    if [ -z "$APISERVER" ]; then
+        die "Apiserver URL should be defined in this mode"
+    fi
+    WARN=${WARN:-30}
+    CRIT=${CRIT:-15}
+    APIHOST=$(echo "$APISERVER" | awk -F[/:] '{print $4}')
+    APIPORT=$(echo "$APISERVER" | awk -F[/:] '{print $5}')
+    APIPORT=${APIPORT:-443}
+    enddate=$(echo | openssl s_client -connect "$APIHOST:$APIPORT" 2>/dev/null | openssl x509 -enddate -noout 2>/dev/null | sed 's/notAfter=//' | xargs -r -0 date +%s -d)
+    if [ -z "$enddate" ]; then
+        echo "API cert expiration date is UNKNOWN"
+        exit 3
+    fi
+    nowdate=$(date +%s)
+    diff=$((($enddate-$nowdate)/24/3600))
+    OUTPUT="API cert expires in $diff days"
+    if [ "$diff" -gt "$WARN" ]  && [ "$diff" -gt "$CRIT" ]; then
+        OUTPUT="OK. $OUTPUT"
+    elif [ "$diff" -le "$WARN" ] && [ "$diff" -gt "$CRIT" ]; then
+        OUTPUT="WARNING. $OUTPUT"
+        EXITCODE=1
+    elif [ "$diff" -le "$CRIT" ]; then
+        OUTPUT="CRITICAL. $OUTPUT"
         EXITCODE=2
     fi
 }
@@ -723,6 +754,7 @@ mode_jobs() {
 
 case "$MODE" in
     (apiserver) mode_apiserver ;;
+    (apicert) mode_apicert ;;
     (daemonsets) mode_daemonsets ;;
     (deployments) mode_deployments ;;
     (nodes) mode_nodes ;;

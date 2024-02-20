@@ -373,7 +373,6 @@ mode_pods() {
     count_ready=0
     count_succeeded=0
     count_failed=0
-    max_restart_count=0
     bad_container=""
     data=$(getJSON "api/v1$api_ns/pods/")
     [ $? -gt 0 ] && die "$data"
@@ -406,6 +405,7 @@ mode_pods() {
                           jq -r "select(.metadata.name==\"$pod\") | \
                                  .status.containerStatuses[]?.name"))
             for container in "${containers[@]}"; do
+                max_restart_count=0
                 restart_count=$(echo "$nsdata" | \
                                 jq -r "select(.metadata.name==\"$pod\") | \
                                        .status.containerStatuses[] | \
@@ -722,10 +722,10 @@ mode_jobs() {
         fi
         for job in "${jobs[@]}"; do
             ((total_jobs++))
-            job_fail_count=$(echo "$data" | jq -r ".items[] | select(.status.failed and .metadata.name==\"$job\") | .status.failed")
+            job_fail_count=$(echo "$data" | jq -r ".items[] | select(.metadata.namespace==\"$ns\" and .status.failed and .metadata.name==\"$job\") | .status.failed")
             total_failed_count="$((total_failed_count+job_fail_count))"
             if [ "$job_fail_count" -ge "${WARN}" ]; then
-                OUTPUT="${OUTPUT}Job $job has $job_fail_count failures\n"
+                OUTPUT="${OUTPUT}Job $ns/$job has $job_fail_count failures\n"
                 EXITCODE=1
             elif [ "$job_fail_count" -ge "${CRIT}" ]; then
                 EXITCODE=2

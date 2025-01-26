@@ -5,8 +5,7 @@
 # Perform checks against Kubernetes API or with tab help of kubectl utility
 # Designed for usage with Nagios, Icinga, Zabbix, Shinken... Whatever.
 #
-# 2018/06/28 Vitaly Agapov <v.agapov@quotix.com>
-# 2020 Roosembert Palacios <roosemberth@posteo.ch>
+# 2018/06/28 Vitaly Agapov <v.agapov@fxpro.com>
 ##########################
 
 usage() {
@@ -26,11 +25,14 @@ usage() {
 	  -w WARN          Warning threshold for
 	                    - TLS expiration days for TLS mode; default is 30
 	                    - Pod restart count in pods mode; default is 30
+	                    - MaxPods Pod count on each system; default is 90%
 	                    - Job failed count in jobs mode; default is 1
 	                    - Pvc storage utilization; default is 80%
 	                    - API cert expiration days for apicert mode; default is 30
 	  -c CRIT          Critical threshold for
+	                    - TLS expiration days for TLS mode; default is 0
 	                    - Pod restart count (in pods mode); default is 150
+	                    - MaxPods Pod count on each system; default is 95%
 	                    - Unbound Persistent Volumes in unboundpvs mode; default is 5
 	                    - Job failed count in jobs mode; default is 2
 	                    - Pvc storage utilization; default is 90%
@@ -47,6 +49,7 @@ usage() {
 	  deployments      Check for deployments availability
 	  jobs             Check for failed jobs
 	  pods             Check for restart count of containters in the pods
+	  maxpods          Check the maxPods value and detect high pod count on each system
 	  replicasets      Check for replicasets readiness
 	  statefulsets     Check for statefulsets readiness
 	  tls              Check for tls secrets expiration dates
@@ -57,7 +60,7 @@ usage() {
     exit 2
 }
 
-VERSION="v1.3.1"
+VERSION="v1.4.0"
 
 TIMEOUT=15
 unset NAME
@@ -172,7 +175,7 @@ mode_apicert() {
         exit 3
     fi
     nowdate=$(date +%s)
-    diff=$((($enddate-$nowdate)/24/3600))
+    diff=$(((enddate-nowdate)/24/3600))
     OUTPUT="API cert expires in $diff days"
     if [ "$diff" -gt "$WARN" ]  && [ "$diff" -gt "$CRIT" ]; then
         OUTPUT="OK. $OUTPUT"
@@ -297,6 +300,7 @@ mode_pvc() {
 
 mode_tls() {
     WARN=${WARN:-30}
+    CRIT=${CRIT:-0}
 
     count_ok=0
     count_warn=0
@@ -337,6 +341,10 @@ mode_tls() {
                 ((count_crit++))
                 EXITCODE=2
                 OUTPUT="$OUTPUT $ns/$cert is expired."
+            elif [ "$diff" -le "$((CRIT*24*3600))" ]; then
+                ((count_crit++))
+                EXITCODE=2
+                OUTPUT="$OUTPUT $ns/$cert is about to expire in $((diff/3600/24)) days."
             elif [ "$diff" -le "$((WARN*24*3600))" ]; then
                 ((count_warn++))
                 if [ "$EXITCODE" == 0 ]; then
@@ -360,6 +368,43 @@ mode_tls() {
                 OUTPUT="OK. TLS secret is OK"
             fi
         fi
+    fi
+}
+
+mode_maxpods() {
+    WARN=${WARN:-90}
+    CRIT=${CRIT:-95}
+
+    data="$(getJSON "api/v1/nodes")"
+    [ $? -gt 0 ] && die "$data"
+    pods="$(getJSON "api/v1/pods")"
+    [ $? -gt 0 ] && die "$pods"
+    nodes=($(echo "$data" | jq -r ".items[].metadata.name"))
+
+    for node in "${nodes[@]}"; do
+        maxpods="$(echo "$data" | jq -r ".items[] | select(.metadata.name==\"$node\") | \
+                                        .status.capacity.pods")"
+        currentpods="$(echo "$pods" | jq -r "[.items[] | select(.spec.nodeName==\"$node\")] | length")"
+        maxpods_percent=$((currentpods * 100 / maxpods))
+
+        maxpods_all+=("Pod usage is $maxpods_percent% (Pods: $currentpods, Limit: $maxpods) on $node;")
+
+        if [ "$maxpods_percent" -ge "$WARN" ]; then
+            EXITCODE=1
+            maxpods_warning+=("Pod usage is $maxpods_percent% (Pods: $currentpods, Limit: $maxpods) on $node;")
+            if [ "$maxpods_percent" -ge "$CRIT" ]; then
+                EXITCODE=2
+                maxpods_critical+=("Pod usage is $maxpods_percent% (Pods: $currentpods, Limit: $maxpods) on $node;")
+            fi
+        fi
+    done
+
+    if [ $EXITCODE = 0 ]; then
+        echo -e "OK." "${maxpods_all[@]}"
+    elif [ $EXITCODE = 1 ]; then
+        echo -e "WARNING." "${maxpods_warning[@]}" "\n\nOverview:" "${maxpods_all[@]}"
+    elif [ $EXITCODE = 2 ]; then
+        echo -e "CRITICAL." "${maxpods_critical[@]}" "\n\nOverview:" "${maxpods_all[@]}"
     fi
 }
 
@@ -560,9 +605,7 @@ mode_daemonsets() {
             fi
         fi
     else
-        if [ $count_failed = 1 ]; then
-            OUTPUT="$OUTPUT"
-        else
+        if [ $count_failed -ne 1 ]; then
             OUTPUT="${OUTPUT}. $((--count_failed)) more are not ready"
         fi
     fi
@@ -621,9 +664,7 @@ mode_replicasets() {
             fi
         fi
     else
-        if [ $count_failed = 1 ]; then
-            OUTPUT="$OUTPUT"
-        else
+        if [ $count_failed -ne 1 ]; then
             OUTPUT="${OUTPUT}. $((--count_failed)) more are not ready"
         fi
     fi
@@ -654,15 +695,17 @@ mode_statefulsets() {
                             jq -r ".items[] | select(.metadata.namespace==\"$ns\") | \
                                    .metadata.name"))
         fi
-        for rs in "${statefulsets[@]}"; do
+        for sts in "${statefulsets[@]}"; do
             declare -A statusArr
             while IFS="=" read -r key value; do
                statusArr[$key]="$value"
             done < <(echo "$data" | \
-                     jq -r ".items[] | select(.metadata.namespace==\"$ns\" and .metadata.name==\"$rs\") | \
+                     jq -r ".items[] | select(.metadata.namespace==\"$ns\" and .metadata.name==\"$sts\") | \
                             .status | to_entries | map(\"\(.key)=\(.value)\") | .[]")
-            OUTPUT="${OUTPUT}Statefulset $ns/$rs ${statusArr[readyReplicas]}/${statusArr[currentReplicas]} ready\n"
-            if [ "${statusArr[readyReplicas]}" != "${statusArr[currentReplicas]}" ]; then
+            if [ "$EXITCODE" == 0 ]; then
+                OUTPUT="Statefulset $ns/$sts ${statusArr[availableReplicas]}/${statusArr[currentReplicas]} ready\n"
+            fi
+            if [ "${statusArr[availableReplicas]}" != "${statusArr[currentReplicas]}" ]; then
                 ((count_failed++))
                 EXITCODE=2
             else
@@ -683,9 +726,7 @@ mode_statefulsets() {
             fi
         fi
     else
-        if [ $count_failed = 1 ]; then
-            OUTPUT="$OUTPUT"
-        else
+        if [ $count_failed -ne 1 ]; then
             OUTPUT="${OUTPUT}. $((--count_failed)) more are not ready"
         fi
     fi
@@ -764,6 +805,7 @@ case "$MODE" in
     (nodes) mode_nodes ;;
     (unboundpvs) mode_unboundpvs ;;
     (pods) mode_pods ;;
+    (maxpods) mode_maxpods ;;
     (replicasets) mode_replicasets ;;
     (statefulsets) mode_statefulsets ;;
     (tls) mode_tls ;;
@@ -772,6 +814,6 @@ case "$MODE" in
     (*) usage ;;
 esac
 
-printf "$OUTPUT"
+echo -e "$OUTPUT"
 
-exit $EXITCODE
+exit "$EXITCODE"
